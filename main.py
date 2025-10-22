@@ -73,40 +73,23 @@ def get_current_video_title() -> str:
 
 def get_video_duration() -> int:
     soup = bs(driver.page_source, 'html.parser')
-    end_of_video = soup.select_one('meta[itemprop="duration"][content]')['content']
-
+    #end_of_video = soup.select_one('meta[itemprop="duration"][content]')['content']
+    end_of_video = soup.find('span', attrs={'class': 'ytp-time-duration'})
     if end_of_video is None:
         raise Exception('Unable to determine when we should go to the next video!')
     
-    end_of_video = end_of_video.lstrip('PT')
-    days = 0
-    hours = 0
-    minutes = 0
-    seconds = 0
-    if 'D' in end_of_video:
-        dlist = end_of_video.split('D', 1)
-        days = int(dlist[0])
-        end_of_video = dlist[1]
-    if 'H' in end_of_video:
-        dlist = end_of_video.split('H', 1)
-        hours = int(dlist[0])
-        end_of_video = dlist[1]
-    if 'M' in end_of_video:
-        dlist = end_of_video.split('M', 1)
-        minutes = int(dlist[0])
-        end_of_video = dlist[1]
-    if 'S' in end_of_video:
-        end_of_video = end_of_video.rstrip('S')
-        seconds = int(end_of_video)
-        
-    if days > 0:
-        hours += days * 24
-    if hours > 0:
-        minutes += hours * 60
-    if minutes > 0:
-        seconds += minutes * 60
+    duration = end_of_video.text
+    
+    tokens = duration.split(':')
+    if len(tokens) == 3:
+        h = int(tokens[0]) * 60 * 60
+        m = int(tokens[1]) * 60
+        return int(tokens[2]) + m + h
+    elif len(tokens) == 2:
+        m = int(tokens[0]) * 60
+        return int(tokens[1]) + m
 
-    return seconds
+    return int(duration)
 
 
 def watch_video(link) -> None:

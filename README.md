@@ -19,7 +19,7 @@ Click "Open in terminal" from the presented options.
 ![Open in Terminal option](./images/terminal-option.png)  
 
 In the terminal, type the following command:  
-`python3 -m pip install -r requirements.txt`
+`python -m pip install -r requirements.txt`
 
 ## Run the code
 `python .\main.py`

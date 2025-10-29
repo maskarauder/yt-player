@@ -5,19 +5,16 @@ import sys
 SCRIPTDIR = os.path.dirname(os.path.realpath(__file__))
 
 from time import sleep
-from selenium.webdriver import ActionChains, Chrome, ChromeOptions
+from selenium.webdriver import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import NoSuchElementException
-from selenium.webdriver.support.ui import WebDriverWait
+
+#from webdriver_manager.chrome import ChromeDriverManager
+import undetected_chromedriver as uc
 from bs4 import BeautifulSoup as bs
-from bs4.element import Tag
-from pprint import pprint
 import random
 
-options = ChromeOptions()
-options.add_argument(f'--user-data-dir={os.path.join(SCRIPTDIR, 'profile')}')
-options.add_argument('--profile-directory=Profile 1')
-driver = Chrome(options=options)
+driver = uc.Chrome(headless=False, use_subprocess=True, user_data_dir=os.path.join(SCRIPTDIR, 'profile'))
 
 
 playlists_location = 'https://www.youtube.com/@BurrPlays1/playlists'

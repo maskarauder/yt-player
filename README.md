@@ -2,10 +2,13 @@
 Plays a random YouTube playlist from a list of playlists.
 
 ## Quick Start
-- Change the URL pointed to by playlists_location in main.py if you're not @BurrPlays1
+- [Download source as a ZIP](./archive/refs/heads/main.zip)
+- Unzip the source
+- Edit main.py to change the URL pointed to by playlists_location if you're not @BurrPlays1
 - Install python
 - Install the packages in requirements.txt
-- run the code with `python .\main.py`
+- Run the code with `python .\main.py`
+- Follow the prompt, hit enter to start it running.
 
 ## Installing Python
 Open a PowerShell windows and type the python command.  
@@ -19,7 +22,7 @@ Click "Open in terminal" from the presented options.
 ![Open in Terminal option](./images/terminal-option.png)  
 
 In the terminal, type the following command:  
-`python -m pip install -r requirements.txt`
+`python -m pip install --upgrade -r requirements.txt`
 
 ## Run the code
 `python .\main.py`
@@ -27,3 +30,10 @@ In the terminal, type the following command:
 or if your profile is already setup you can skip the setup prompt with
 
 `python .\main.py --skip-prompt`
+
+## Troubleshooting
+If it tells you you are using Chrome 1.\<some number\> and you need to be using Chrome 1.\<some higher number\>, update Chrome by going to the About Chrome tab under Help and following the prompt. It should then work.  
+![Help -> About Google Chrome](./images/chrome-help.png)
+
+
+![Chrome Version](./images/chrome-help-version.png)

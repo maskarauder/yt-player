@@ -88,6 +88,13 @@ def get_video_duration() -> int:
 
     return int(duration)
 
+def fullscreen_video() -> None:
+    fullscreen_button = driver.find_element(By.CLASS_NAME, 'ytp-fullscreen-button')
+    ActionChains(driver) \
+        .move_to_element(fullscreen_button) \
+        .pause(.5) \
+        .click() \
+        .perform()
 
 def watch_video(link) -> None:
     driver.get(link)
@@ -96,6 +103,7 @@ def watch_video(link) -> None:
     last_video_in_list = get_last_video_in_playlist()
     current_video = get_current_video_title()
 
+    fullscreen_video()
     while current_video != last_video_in_list:
         sleep(10)
         current_video = get_current_video_title()

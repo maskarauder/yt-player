@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # Browser Options
-PAUSE_FOR_BROWSER_LOGIN           = False           # Pause to let the user log into the browser, should only be necessary once.
+PAUSE_FOR_BROWSER_LOGIN           = True            # Pause to let the user log into the browser, should only be necessary once.
 PLAYLISTS_LOCATION                = 'https://www.youtube.com/@BurrPlays1/playlists'
 
 # OBS Options

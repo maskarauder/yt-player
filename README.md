@@ -66,6 +66,8 @@ PLAYLIST_BLACKLIST = [
 Run `python -m unittest discover -s tests -v`. The tests use fake browser and OBS clients, so they do not require a running Chrome or OBS instance. Player JavaScript tests also run when Node.js is installed; otherwise those tests are skipped.
 
 ## Troubleshooting
+The console reports `Opening playlists page`, `Scrolling the playlists page`, `Found ... playlists`, and `Selected playlist`. If playback does not start, the last message identifies the stage that needs attention. A navigation timeout is allowed to use content already loaded; playlist discovery does not depend on thumbnail CSS classes or a visible loading marker.
+
 If it tells you you are using Chrome 1.\<some number\> and you need to be using Chrome 1.\<some higher number\>, update Chrome by going to the About Chrome tab under Help and following the prompt. It should then work.  
 ![Help -> About Google Chrome](./images/chrome-help.png)
 

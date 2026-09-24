@@ -18,9 +18,9 @@ SCRIPTDIR = os.path.dirname(os.path.realpath(__file__))
 PAGE_TIMEOUT = 30
 RETRY_DELAY = 30
 PLAYLIST_LINKS = (
-    'a.yt-lockup-view-model__content-image[href*="list="], '
-    'ytd-grid-playlist-renderer a[href*="list="], '
-    'ytd-playlist-renderer a[href*="list="]'
+    'ytd-browse:not([hidden]) a[href*="list="], '
+    '#page-manager > :not([hidden]) a[href*="list="], '
+    'main a[href*="list="], [role="main"] a[href*="list="]'
 )
 driver = None
 
@@ -62,7 +62,10 @@ return window.__ytPlayerCompletion.read(player.getPlayerState());
 
 def create_browser() -> None:
     global driver
-    driver = uc.Chrome(headless=False, use_subprocess=True,
+    options = uc.ChromeOptions()
+    # YouTube can keep loading secondary resources after the page is usable.
+    options.page_load_strategy = 'eager'
+    driver = uc.Chrome(options=options, headless=False, use_subprocess=True,
                        user_data_dir=os.path.join(SCRIPTDIR, 'profile'))
     driver.set_page_load_timeout(PAGE_TIMEOUT)
 
@@ -80,24 +83,25 @@ def close_browser() -> None:
 
 def scroll_to_load_content() -> None:
     deadline = monotonic() + 60
+    print('Scrolling the playlists page...')
     while monotonic() < deadline:
         try:
-            continuations = driver.find_elements(
-                By.CSS_SELECTOR, 'ytd-browse ytd-continuation-item-renderer')
-            visible = [item for item in continuations if item.is_displayed()]
-            if not visible:
-                return
             count = len(driver.find_elements(By.CSS_SELECTOR, PLAYLIST_LINKS))
-            ActionChains(driver).scroll_to_element(visible[-1]).perform()
-            WebDriverWait(driver, min(10, max(0, deadline - monotonic()))).until(
-                lambda d: len(d.find_elements(By.CSS_SELECTOR, PLAYLIST_LINKS)) > count
-                or not any(item.is_displayed() for item in d.find_elements(
-                    By.CSS_SELECTOR, 'ytd-browse ytd-continuation-item-renderer')))
+            # Scroll even if cards or the continuation marker are not ready yet.
+            # A hidden/zero-size loading marker must not prevent pagination.
+            driver.execute_script('''
+                const page = document.scrollingElement || document.documentElement;
+                window.scrollTo(0, page.scrollHeight);
+            ''')
+            wait = PAGE_TIMEOUT if count == 0 else 10
+            WebDriverWait(driver, min(wait, max(0, deadline - monotonic()))).until(
+                lambda d: len(d.find_elements(By.CSS_SELECTOR, PLAYLIST_LINKS)) > count)
         except StaleElementReferenceException:
             continue
         except TimeoutException:
-            # Keep the playlists already loaded if pagination stalls.
+            # No new cards arrived. Keep everything already loaded.
             return
+    print('Reached the scrolling time limit; using the playlists loaded so far.')
 
 
 def allow_setup_and_login() -> None:
@@ -107,9 +111,15 @@ def allow_setup_and_login() -> None:
 
 
 def get_available_playlists() -> list:
-    driver.get(PLAYLISTS_LOCATION)
+    print(f'Opening playlists page: {PLAYLISTS_LOCATION}')
+    try:
+        driver.get(PLAYLISTS_LOCATION)
+    except TimeoutException:
+        print('Navigation timed out; checking the content already loaded.')
+    # Do not require playlist cards before scrolling: lazy loading may need a
+    # scroll first, and thumbnail CSS classes vary between YouTube layouts.
     WebDriverWait(driver, PAGE_TIMEOUT).until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, PLAYLIST_LINKS)))
+        EC.presence_of_element_located((By.TAG_NAME, 'body')))
     scroll_to_load_content()
     playlists = {}
     for item in driver.find_elements(By.CSS_SELECTOR, PLAYLIST_LINKS):
@@ -127,6 +137,10 @@ def get_available_playlists() -> list:
             params['v'] = query['v'][0]
         path = '/watch' if 'v' in params else '/playlist'
         playlists.setdefault(playlist_id, 'https://www.youtube.com' + path + '?' + urlencode(params))
+    print(f'Found {len(playlists)} playlists.')
+    if not playlists:
+        print(f'No playlist links were found at {driver.current_url}. '
+              'Check that the playlists page is visible and no sign-in or consent prompt is blocking it.')
     return list(playlists.values())
 
 
@@ -188,6 +202,7 @@ def perform() -> None:
                 print('No different, non-blacklisted playlist is available. Checking again in 30 seconds...')
                 sleep(RETRY_DELAY)
                 continue
+            print(f'Selected playlist: {selected}')
             watch_video(selected)
             last_selected = selected
         except (TimeoutException, StaleElementReferenceException) as exc:

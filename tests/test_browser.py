@@ -26,7 +26,8 @@ def load_browser():
         ID="id", XPATH="xpath",
     )
     dependencies = {
-        "undetected_chromedriver": types.SimpleNamespace(Chrome=chrome),
+        "undetected_chromedriver": types.SimpleNamespace(
+            Chrome=chrome, ChromeOptions=types.SimpleNamespace),
         "bs4": types.SimpleNamespace(BeautifulSoup=Mock(name="BeautifulSoup")),
         "selenium": types.ModuleType("selenium"),
         "selenium.webdriver": types.SimpleNamespace(ActionChains=Mock()),
@@ -56,6 +57,13 @@ class PlaylistSelectionTests(unittest.TestCase):
     def test_import_does_not_launch_chrome(self):
         self.chrome.assert_not_called()
         self.assertIsNone(self.browser.driver)
+
+    def test_chrome_does_not_wait_for_all_secondary_resources(self):
+        self.browser.create_browser()
+        options = self.chrome.call_args.kwargs["options"]
+        self.assertEqual(options.page_load_strategy, "eager")
+        self.chrome.return_value.set_page_load_timeout.assert_called_once_with(
+            self.browser.PAGE_TIMEOUT)
 
     def test_empty_playlist_discovery_has_no_selection(self):
         self.assertIsNone(self.browser.choose_playlist([], None))
@@ -131,6 +139,89 @@ class PlaylistSelectionTests(unittest.TestCase):
         for _ in range(20):
             selected = self.browser.choose_playlist(["previous", "next", "another"], "previous")
             self.assertIn(selected, ["next", "another"])
+
+
+class DiscoveryFlowTests(unittest.TestCase):
+    """Exercise discovery and actual wait predicates against a changing page."""
+
+    def setUp(self):
+        self.browser, _ = load_browser()
+        self.browser.driver = Mock()
+        self.cards = []
+        self.scroll_batches = []
+        self.scroll_count = 0
+        self.predicate_calls = 0
+        self.browser.driver.find_elements.side_effect = self.find_elements
+        self.browser.driver.find_element.side_effect = self.find_element
+        self.browser.driver.execute_script.side_effect = self.scroll_page
+        self.browser.EC.presence_of_element_located = (
+            lambda locator: lambda driver: driver.find_element(*locator))
+        self.browser.WebDriverWait = self.wait
+
+    def add_cards(self, hrefs):
+        self.cards.extend(
+            Mock(get_attribute=Mock(return_value=href)) for href in hrefs)
+
+    def find_elements(self, by, selector):
+        if selector == self.browser.PLAYLIST_LINKS:
+            return list(self.cards)
+        if "continuation" in selector:
+            return []  # This page exposes no continuation marker.
+        raise AssertionError(f"Unexpected lookup: {by}, {selector}")
+
+    def find_element(self, by, selector):
+        if (by, selector) == (self.browser.By.TAG_NAME, "body"):
+            return object()
+        elements = self.find_elements(by, selector)
+        return elements[0] if elements else False
+
+    def scroll_page(self, script):
+        self.assertIn("scroll", script.lower())
+        self.scroll_count += 1
+        if self.scroll_count > 10:
+            raise AssertionError("Pagination did not stop after content stopped growing")
+        if self.scroll_batches:
+            self.add_cards(self.scroll_batches.pop(0))
+
+    def wait(self, driver, timeout):
+        test = self
+
+        class PredicateWait:
+            def until(self, condition):
+                for _ in range(5):
+                    test.predicate_calls += 1
+                    value = condition(driver)
+                    if value:
+                        return value
+                raise test.browser.TimeoutException("No content change during wait")
+
+        return PredicateWait()
+
+    def test_navigation_timeout_keeps_usable_loaded_content(self):
+        self.add_cards(["/playlist?list=PL1"])
+        self.browser.driver.get.side_effect = self.browser.TimeoutException(
+            "A secondary resource did not finish loading")
+        playlists = self.browser.get_available_playlists()
+        self.assertEqual(playlists, ["https://www.youtube.com/playlist?list=PL1"])
+        self.browser.driver.get.assert_called_once_with(self.browser.PLAYLISTS_LOCATION)
+        self.assertEqual(self.scroll_count, 1)
+        self.assertGreater(self.predicate_calls, 0)
+
+    def test_scrolling_reveals_first_cards_without_a_continuation_marker(self):
+        self.scroll_batches = [["/playlist?list=PL1"], ["/playlist?list=PL2"]]
+        playlists = self.browser.get_available_playlists()
+        self.assertEqual(playlists, [
+            "https://www.youtube.com/playlist?list=PL1",
+            "https://www.youtube.com/playlist?list=PL2",
+        ])
+        self.assertEqual(self.scroll_count, 3)
+        self.assertGreater(self.predicate_calls, self.scroll_count)
+
+    def test_pagination_stops_when_existing_cards_do_not_grow(self):
+        self.add_cards(["/playlist?list=PL1"])
+        self.browser.scroll_to_load_content()
+        self.assertEqual(self.scroll_count, 1)
+        self.assertGreater(self.predicate_calls, 1)
 
 
 class PlaybackTests(unittest.TestCase):

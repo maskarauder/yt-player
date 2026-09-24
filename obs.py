@@ -1,118 +1,167 @@
 #!/usr/bin/env python3
 
-# OBS API
+from queue import Empty, SimpleQueue
+from threading import Event, Thread
+from time import monotonic
+
 import obsws_python as obs
 
-# App Specific
-from config import *
-from time import sleep
-from pprint import pprint
-from threading import Thread
+from config import (
+    OBS_HOST,
+    OBS_PORT,
+    OBS_WEBSOCKET_PASSWORD,
+    RESTART_INTERVAL,
+    RESTART_ON_UNEXPECTED_END,
+)
+
 
 class OBSThread(Thread):
-    uptime = -1
-    ready_to_die = False
+    POLL_INTERVAL = 1
+    RESTART_DELAY = 2
+    TRANSITION_TIMEOUT = 30
+    MAX_RESTART_ATTEMPTS = 3
 
-    def on_exit_started(self, _):
-        """OBS is dying."""
-        print("OBS closing!")
-        self.ready_to_die = True
-
-    def on_stream_state_changed(self, data):
-        """Stream has either started or stopped."""
-
-        if str(data.output_state) == "OBS_WEBSOCKET_OUTPUT_STARTING":
-            print('Stream is starting...')
-            return
-        elif str(data.output_state) == "OBS_WEBSOCKET_OUTPUT_STOPPING":
-            print('Stream is stopping...')
-            return
-        elif str(data.output_state) == "OBS_WEBSOCKET_OUTPUT_STOPPED":
-            if self.uptime >= RESTART_INTERVAL or RESTART_ON_UNEXPECTED_END:
-                if self.uptime < RESTART_INTERVAL:
-                    print('Stream down unexpectedly? Attempting to restart it.')
-                else:
-                    print('Stream restarting at regularly scheduled interval.')
-                    self.uptime = 0
-                sleep(2) # it needs a sec, give it 2 to be safe.
-                self.cl.start_stream()
-            return
-        elif data.output_active:
-            # Stream switched on
-            self.uptime = 0
-                
     def __init__(self):
+        super().__init__(name='OBS monitor')
         self.cl = None
         self.ecl = None
-        Thread.__init__(self)
+        self.uptime = -1
+        self._stop_event = Event()
+        self._events = SimpleQueue()
+        self._active = False
+        self._has_streamed = False
+        self._restart_phase = None
+        self._deadline = 0
+        self._attempts = 0
+        self._restart_failed = False
 
-    def __del__(self):
-        try:
-            if self.ecl:
-                self.ecl.disconnect()
-        except Exception:
-            pass
+    def stop(self):
+        """Stop monitoring without changing OBS's current stream state."""
+        self._stop_event.set()
 
-        try:
-            if self.cl:
-                self.cl.disconnect()
-        except Exception:
-            pass
+    def on_exit_started(self, _):
+        print('OBS closing!')
+        self.stop()
 
-    def run(self) -> None:
-        while not self.connect_to_obs():
-            print('Failed to connect to OBS. Retrying in 1 sec...')
-            sleep(1)
+    def on_stream_state_changed(self, data):
+        # This runs on the event client's thread. Only run() sends requests.
+        self._events.put(str(data.output_state))
+
+    def connect_to_obs(self):
+        options = dict(host=OBS_HOST, port=OBS_PORT,
+                       password=OBS_WEBSOCKET_PASSWORD, timeout=3)
+        # Assign immediately so a partially successful connection gets closed.
+        self.cl = obs.ReqClient(**options)
+        if self._stop_event.is_set():
+            return
+        self.ecl = obs.EventClient(**options)
+        self.ecl.callback.register([
+            self.on_exit_started,
+            self.on_stream_state_changed,
+        ])
+        print('Connected to OBS.')
+
+    def _disconnect(self):
+        for name in ('ecl', 'cl'):
+            client = getattr(self, name)
+            setattr(self, name, None)
+            if client is not None:
+                try:
+                    client.disconnect()
+                except Exception as exc:
+                    print(f'Could not close OBS {name} connection: {exc}')
+        # Old connection events must not affect a new connection.
+        self._events = SimpleQueue()
+
+    def _failed_restart(self, message):
+        print(f'{message} Waiting for a manual stream restart.')
+        self._restart_phase = None
+        self._restart_failed = True
+
+    def _check_stream(self, status, now):
+        was_active, previous_uptime = self._active, self.uptime
+        self._active = status.output_active
+        self.uptime = int(status.output_duration // 1000)
+
+        if self._active:
+            self._has_streamed = True
+            if not was_active or self.uptime < previous_uptime:
+                self._restart_failed = False
+
+            if self._restart_phase in ('delay', 'starting'):
+                print('Stream is running again.')
+                self._restart_phase = None
+            elif self._restart_phase == 'stopping':
+                if now >= self._deadline:
+                    if self._attempts >= self.MAX_RESTART_ATTEMPTS:
+                        self._failed_restart('Stream did not stop after three attempts.')
+                    else:
+                        self._attempts += 1
+                        self._deadline = now + self.TRANSITION_TIMEOUT
+                        print(f'Retrying stream stop (attempt {self._attempts}).')
+                        self.cl.stop_stream()
+                return
+
+            if (not self._restart_failed and RESTART_INTERVAL >= 0
+                    and self.uptime >= RESTART_INTERVAL):
+                print('Restarting stream at the configured interval.')
+                self._restart_phase = 'stopping'
+                self._deadline = now + self.TRANSITION_TIMEOUT
+                self._attempts = 1
+                self.cl.stop_stream()
             return
 
-        # If stream is already running, grab the current uptime.        
-        stream_status = self.cl.get_stream_status()
-        if not stream_status.output_active:
-            print('Waiting for stream to start...')
+        if self._restart_phase == 'stopping':
+            self._restart_phase = 'delay'
+            self._deadline = now + self.RESTART_DELAY
+            self._attempts = 0
+        elif self._restart_phase == 'starting':
+            if now < self._deadline:
+                return
+            if self._attempts >= self.MAX_RESTART_ATTEMPTS:
+                self._failed_restart('Stream did not restart after three attempts.')
+                return
+            print('Stream has not started yet; retrying shortly.')
+            self._restart_phase = 'delay'
+            self._deadline = now + self.RESTART_DELAY
+        elif (self._restart_phase is None and self._has_streamed
+                and RESTART_ON_UNEXPECTED_END and not self._restart_failed):
+            print('Stream stopped unexpectedly; restarting shortly.')
+            self._restart_phase = 'delay'
+            self._deadline = now + self.RESTART_DELAY
+            self._attempts = 0
 
-        while not stream_status.output_active:
-            stream_status = self.cl.get_stream_status()
-            sleep(1)
+        if self._restart_phase == 'delay' and now >= self._deadline:
+            self._attempts += 1
+            self._restart_phase = 'starting'
+            self._deadline = now + self.TRANSITION_TIMEOUT
+            print(f'Starting stream (attempt {self._attempts}).')
+            self.cl.start_stream()
 
-        self.uptime = int(stream_status.output_duration // 1000)
-        print(f'Stream is up. Restarting stream in {RESTART_INTERVAL - self.uptime} seconds.')
-
-        # Start event listeners
-        self.ecl.callback.register(
-            [
-                self.on_exit_started,
-                self.on_stream_state_changed,
-            ]
-        )
-
-        while not self.ready_to_die:
-            if self.uptime >= RESTART_INTERVAL:
-                self.cl.stop_stream()
-                # Event Client will handle the restart.
-
-            sleep(10)
-            
-            stream_status = self.cl.get_stream_status()
-            if not stream_status.output_active:
-                print('Stream failed to restart.')
-                self.ready_to_die = True
-            self.uptime = int(stream_status.output_duration // 1000)
-
-        print('OBS thread is dying. sleepiHYUCK')
-
-
-    def connect_to_obs(self) -> bool:
-        global source
-
-        cl = obs.ReqClient(host=OBS_HOST, port=OBS_PORT, password=OBS_WEBSOCKET_PASSWORD, timeout=3)
-        if cl is None:
-            return False
-
-        ecl = obs.EventClient(host=OBS_HOST, port=OBS_PORT, password=OBS_WEBSOCKET_PASSWORD, timeout=3)
-        if ecl is None:
-            cl.disconnect()
-            return False
-        
-        self.cl = cl
-        self.ecl = ecl
-        return True
+    def run(self):
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    if self.cl is None:
+                        self.connect_to_obs()
+                    if self._stop_event.is_set():
+                        break
+                    if not self.ecl.worker.is_alive():
+                        raise ConnectionError('OBS event connection closed')
+                    while True:
+                        try:
+                            state = self._events.get_nowait()
+                        except Empty:
+                            break
+                        if state == 'OBS_WEBSOCKET_OUTPUT_STARTED':
+                            self._has_streamed = True
+                    status = self.cl.get_stream_status()
+                    if not self._stop_event.is_set():
+                        self._check_stream(status, monotonic())
+                except Exception as exc:
+                    print(f'OBS connection/request failed: {exc}. Retrying in 1 second.')
+                    self._disconnect()
+                if self._stop_event.wait(self.POLL_INTERVAL):
+                    break
+        finally:
+            self._disconnect()

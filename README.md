@@ -41,6 +41,16 @@ or if your profile is already setup you can skip the setup prompt by modifying !
 
 `PAUSE_FOR_BROWSER_LOGIN           = False`
 
+## Playback and recovery
+- The same playlist is never selected twice in a row. If no different playlist is available, the script waits 30 seconds and checks again.
+- Playlist completion uses the final video's ID, position, and ended state. Pausing or buffering does not count as finishing the video.
+- Slow YouTube page loads are retried. Closing Chrome or stopping the script also stops the OBS monitor and closes its connections; it does not stop an active OBS stream.
+- Set `RESTART_INTERVAL = -1` to disable scheduled restarts. `RESTART_ON_UNEXPECTED_END` separately controls recovery after an unexpected stop.
+- OBS connection failures are retried. Stream restarts allow 30 seconds per stop/start attempt, with up to three attempts before waiting for a manual stream restart.
+
+## Regression tests
+Run `python -m unittest discover -s tests -v`. The tests use fake browser and OBS clients, so they do not require a running Chrome or OBS instance. Player JavaScript tests also run when Node.js is installed; otherwise those tests are skipped.
+
 ## Troubleshooting
 If it tells you you are using Chrome 1.\<some number\> and you need to be using Chrome 1.\<some higher number\>, update Chrome by going to the About Chrome tab under Help and following the prompt. It should then work.  
 ![Help -> About Google Chrome](./images/chrome-help.png)

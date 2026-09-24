@@ -1,126 +1,190 @@
 #!/usr/bin/env python3
 
 import os
-SCRIPTDIR = os.path.dirname(os.path.realpath(__file__))
-
-from time import sleep
-from selenium.webdriver import ActionChains
-from selenium.webdriver.common.by import By
-from selenium.common.exceptions import NoSuchElementException
-
-from config import *
 import random
+from time import monotonic, sleep
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 import undetected_chromedriver as uc
-from bs4 import BeautifulSoup as bs
+from selenium.webdriver import ActionChains
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
 
-driver = uc.Chrome(headless=False, use_subprocess=True, user_data_dir=os.path.join(SCRIPTDIR, 'profile'))
+from config import PAUSE_FOR_BROWSER_LOGIN, PLAYLISTS_LOCATION
+
+SCRIPTDIR = os.path.dirname(os.path.realpath(__file__))
+PAGE_TIMEOUT = 30
+RETRY_DELAY = 30
+PLAYLIST_LINKS = (
+    'a.yt-lockup-view-model__content-image[href*="list="], '
+    'ytd-grid-playlist-renderer a[href*="list="], '
+    'ytd-playlist-renderer a[href*="list="]'
+)
+driver = None
+
+# The watch-page player exposes the playlist/player methods also used by the
+# YouTube player API. Latch the final ENDED event so autoplay cannot hide it
+# between Selenium polls. Inspect IDs and position, never display titles.
+PLAYER_STATE_SCRIPT = """
+const player = document.getElementById('movie_player');
+const methods = ['getPlaylist', 'getPlaylistIndex', 'getVideoUrl',
+                 'getPlayerState', 'addEventListener'];
+if (!player || methods.some(name => typeof player[name] !== 'function')) {
+    return null;
+}
+if (!window.__ytPlayerCompletion || window.__ytPlayerCompletion.player !== player) {
+    const tracker = {player: player, ended: false};
+    window.__ytPlayerCompletion = tracker;
+    tracker.read = function(state) {
+        const ids = player.getPlaylist() || [];
+        const index = player.getPlaylistIndex();
+        const id = new URL(player.getVideoUrl(), location.href).searchParams.get('v');
+        const advertising = player.classList.contains('ad-showing') ||
+                            player.classList.contains('ad-interrupting');
+        const ready = ids.length > 0 && index >= 0 && index < ids.length &&
+                      id === ids[index];
+        if (ready && !advertising && index === ids.length - 1 && state === 0) {
+            tracker.ended = true;
+        }
+        return {ready: ready, ended: tracker.ended};
+    };
+    window.__ytPlayerStateChanged = function(event) {
+        const state = typeof event === 'number' ? event : event.data;
+        tracker.read(state);
+    };
+    player.addEventListener('onStateChange', '__ytPlayerStateChanged');
+}
+return window.__ytPlayerCompletion.read(player.getPlayerState());
+"""
+
+
+def create_browser() -> None:
+    global driver
+    driver = uc.Chrome(headless=False, use_subprocess=True,
+                       user_data_dir=os.path.join(SCRIPTDIR, 'profile'))
+    driver.set_page_load_timeout(PAGE_TIMEOUT)
+
+
+def close_browser() -> None:
+    global driver
+    current, driver = driver, None
+    if current is not None:
+        try:
+            current.quit()
+        except Exception as exc:
+            # A manually closed browser may already have disconnected.
+            print(f'Could not close browser cleanly: {exc}')
 
 
 def scroll_to_load_content() -> None:
-    try:
-        while True:
-            bottom_of_list = driver.find_element(By.TAG_NAME, 'ytd-continuation-item-renderer')
-            ActionChains(driver) \
-                .scroll_to_element(bottom_of_list) \
-                .perform()
-            sleep(.5)
-    except NoSuchElementException:
-        return
+    deadline = monotonic() + 60
+    while monotonic() < deadline:
+        try:
+            continuations = driver.find_elements(
+                By.CSS_SELECTOR, 'ytd-browse ytd-continuation-item-renderer')
+            visible = [item for item in continuations if item.is_displayed()]
+            if not visible:
+                return
+            count = len(driver.find_elements(By.CSS_SELECTOR, PLAYLIST_LINKS))
+            ActionChains(driver).scroll_to_element(visible[-1]).perform()
+            WebDriverWait(driver, min(10, max(0, deadline - monotonic()))).until(
+                lambda d: len(d.find_elements(By.CSS_SELECTOR, PLAYLIST_LINKS)) > count
+                or not any(item.is_displayed() for item in d.find_elements(
+                    By.CSS_SELECTOR, 'ytd-browse ytd-continuation-item-renderer')))
+        except StaleElementReferenceException:
+            continue
+        except TimeoutException:
+            # Keep the playlists already loaded if pagination stalls.
+            return
 
 
 def allow_setup_and_login() -> None:
     driver.get('https://www.youtube.com')
-    sleep(1)
-
-    input('Please login to YouTube and/or configure whatever extensions you want on this profile then press enter to continue...')
+    input('Please login to YouTube and/or configure whatever extensions you want '
+          'on this profile then press enter to continue...')
 
 
 def get_available_playlists() -> list:
     driver.get(PLAYLISTS_LOCATION)
-    sleep(1)
+    WebDriverWait(driver, PAGE_TIMEOUT).until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, PLAYLIST_LINKS)))
     scroll_to_load_content()
-
-    soup = bs(driver.page_source, 'html.parser')
-    res = soup.find_all('a', attrs={'class': 'yt-lockup-view-model__content-image'})
-
-    vids = []
-    for i in res:
-        vids.append('https://www.youtube.com' + i.get('href'))
-    return vids
-
-
-def get_last_video_in_playlist() -> str:
-    soup = bs(driver.page_source, 'html.parser')
-    res = soup.find_all('span', attrs={'id': 'video-title', 'class': 'style-scope ytd-playlist-panel-video-renderer'})
-
-    return res[-1].get('title')
-
-
-def get_current_video_title() -> str:
-    soup = bs(driver.page_source, 'html.parser')
-    title = soup.find('h1', attrs={'class': 'style-scope ytd-watch-metadata'}) \
-                .find('yt-formatted-string')
-
-    return title.get('title')
+    playlists = {}
+    for item in driver.find_elements(By.CSS_SELECTOR, PLAYLIST_LINKS):
+        href = item.get_attribute('href')
+        if not href:
+            continue
+        parsed = urlparse(urljoin('https://www.youtube.com', href))
+        query = parse_qs(parsed.query)
+        playlist_id = query.get('list', [None])[0]
+        if not playlist_id:
+            continue
+        # Deduplicate by playlist ID, including cards with different video URLs.
+        params = {'list': playlist_id}
+        if query.get('v'):
+            params['v'] = query['v'][0]
+        path = '/watch' if 'v' in params else '/playlist'
+        playlists.setdefault(playlist_id, 'https://www.youtube.com' + path + '?' + urlencode(params))
+    return list(playlists.values())
 
 
-def get_video_duration() -> int:
-    soup = bs(driver.page_source, 'html.parser')
-    #end_of_video = soup.select_one('meta[itemprop="duration"][content]')['content']
-    end_of_video = soup.find('span', attrs={'class': 'ytp-time-duration'})
-    if end_of_video is None:
-        raise Exception('Unable to determine when we should go to the next video!')
-    
-    duration = end_of_video.text
-    
-    tokens = duration.split(':')
-    if len(tokens) == 3:
-        h = int(tokens[0]) * 60 * 60
-        m = int(tokens[1]) * 60
-        return int(tokens[2]) + m + h
-    elif len(tokens) == 2:
-        m = int(tokens[0]) * 60
-        return int(tokens[1]) + m
+def choose_playlist(playlists, last_selected):
+    def identity(link):
+        return parse_qs(urlparse(link).query).get('list', [link])[0]
 
-    return int(duration)
+    previous_id = identity(last_selected) if last_selected else None
+    alternatives = [link for link in playlists if identity(link) != previous_id]
+    return random.choice(alternatives) if alternatives else None
+
+
+def get_playback_state():
+    state = driver.execute_script(PLAYER_STATE_SCRIPT)
+    return state if state and (state['ready'] or state['ended']) else False
+
 
 def fullscreen_video() -> None:
-    fullscreen_button = driver.find_element(By.CLASS_NAME, 'ytp-fullscreen-button')
-    ActionChains(driver) \
-        .move_to_element(fullscreen_button) \
-        .pause(.5) \
-        .click() \
-        .perform()
+    if driver.execute_script('return Boolean(document.fullscreenElement);'):
+        return
+    button = WebDriverWait(driver, PAGE_TIMEOUT).until(
+        EC.element_to_be_clickable((By.CLASS_NAME, 'ytp-fullscreen-button')))
+    ActionChains(driver).move_to_element(button).click().perform()
+
 
 def watch_video(link) -> None:
     driver.get(link)
-    sleep(5)
-
-    last_video_in_list = get_last_video_in_playlist()
-    current_video = get_current_video_title()
-
+    if urlparse(link).path == '/playlist':
+        first_video = WebDriverWait(driver, PAGE_TIMEOUT).until(
+            EC.presence_of_element_located(
+                (By.CSS_SELECTOR, 'a[href*="/watch?"][href*="list="]')))
+        driver.get(first_video.get_attribute('href'))
+    state = WebDriverWait(driver, PAGE_TIMEOUT).until(lambda _: get_playback_state())
     fullscreen_video()
-    while current_video != last_video_in_list:
-        sleep(10)
-        current_video = get_current_video_title()
+    while not state['ended']:
+        sleep(1)
+        # Wait through temporary player replacement during playlist navigation.
+        # A missing/broken player eventually times out and is retried by perform.
+        state = WebDriverWait(driver, PAGE_TIMEOUT).until(lambda _: get_playback_state())
+    print('Playlist finished.')
 
-    duration = get_video_duration()
-    print(f'Last vid detected! Sleeping for {duration}')
-    sleep(duration)
 
 def perform() -> None:
+    create_browser()
     if PAUSE_FOR_BROWSER_LOGIN:
         allow_setup_and_login()
 
     last_selected = None
-    currently_selected = None
     while True:
-        playlists = get_available_playlists()
-
-        while currently_selected == last_selected:
-            currently_selected = random.choice(playlists)
-
-        last_selected = currently_selected
-
-        watch_video(currently_selected)
+        try:
+            playlists = get_available_playlists()
+            selected = choose_playlist(playlists, last_selected)
+            if selected is None:
+                print('No different playlist is available. Checking again in 30 seconds...')
+                sleep(RETRY_DELAY)
+                continue
+            watch_video(selected)
+            last_selected = selected
+        except (TimeoutException, StaleElementReferenceException) as exc:
+            print(f'YouTube did not finish loading. Retrying in 30 seconds: {exc}')
+            sleep(RETRY_DELAY)

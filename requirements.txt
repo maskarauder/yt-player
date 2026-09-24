@@ -1,5 +1,4 @@
 selenium
-BeautifulSoup4
 setuptools
 undetected-chromedriver
 obsws-python

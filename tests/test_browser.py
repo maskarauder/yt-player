@@ -78,6 +78,32 @@ class PlaylistSelectionTests(unittest.TestCase):
         alternate = "https://www.youtube.com/watch?v=second&list=PL1"
         self.assertIsNone(self.browser.choose_playlist([alternate], previous))
 
+    def test_blacklist_id_excludes_all_video_urls_for_that_playlist(self):
+        self.browser.PLAYLIST_BLACKLIST = [" PL1 "]
+        links = [
+            "https://www.youtube.com/watch?v=first&list=PL1",
+            "https://www.youtube.com/watch?v=second&list=PL1&index=2",
+            "https://www.youtube.com/playlist?list=PL2",
+        ]
+        self.assertEqual(self.browser.choose_playlist(links, None), links[2])
+
+    def test_blacklist_url_matches_playlist_id_despite_other_parameters(self):
+        self.browser.PLAYLIST_BLACKLIST = [
+            "https://www.youtube.com/watch?v=other&list=PL1&index=7",
+            "https://www.youtube.com/playlist?list=PL2",
+        ]
+        links = [
+            "https://www.youtube.com/playlist?list=PL1",
+            "https://www.youtube.com/watch?v=first&list=PL2",
+        ]
+        self.assertIsNone(self.browser.choose_playlist(links, None))
+
+    def test_blacklist_does_not_force_repeating_the_previous_playlist(self):
+        self.browser.PLAYLIST_BLACKLIST = ["PL2"]
+        previous = "https://www.youtube.com/playlist?list=PL1"
+        blocked = "https://www.youtube.com/playlist?list=PL2"
+        self.assertIsNone(self.browser.choose_playlist([previous, blocked], previous))
+
     def test_discovery_deduplicates_playlist_ids_and_normalizes_links(self):
         hrefs = [
             "/watch?v=first&list=PL1&index=7",

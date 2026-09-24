@@ -3,8 +3,13 @@
 # Browser Options
 PAUSE_FOR_BROWSER_LOGIN           = True            # Pause to let the user log into the browser, should only be necessary once.
 PLAYLISTS_LOCATION                = 'https://www.youtube.com/@BurrPlays1/playlists'
+PLAYLIST_BLACKLIST                = [              # Playlist IDs or URLs containing list=; never selected.
+    # 'PL_REPLACE_WITH_PLAYLIST_ID',
+    # 'https://www.youtube.com/playlist?list=PL_ANOTHER_ID',
+]
 
 # OBS Options
+ENABLE_OBS:bool                   = True            # False runs only the browser, without connecting to OBS.
 OBS_HOST:str                      = "localhost"     # Default: OBS is on the system running this script.
 OBS_PORT:int                      = 4455            # From OBS, the default is 4455
 OBS_WEBSOCKET_PASSWORD:str        = ""              # From OBS, empty string if no password

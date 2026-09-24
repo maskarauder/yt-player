@@ -12,7 +12,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
 
-from config import PAUSE_FOR_BROWSER_LOGIN, PLAYLISTS_LOCATION
+from config import PAUSE_FOR_BROWSER_LOGIN, PLAYLIST_BLACKLIST, PLAYLISTS_LOCATION
 
 SCRIPTDIR = os.path.dirname(os.path.realpath(__file__))
 PAGE_TIMEOUT = 30
@@ -130,12 +130,17 @@ def get_available_playlists() -> list:
     return list(playlists.values())
 
 
-def choose_playlist(playlists, last_selected):
-    def identity(link):
-        return parse_qs(urlparse(link).query).get('list', [link])[0]
+def playlist_identity(link):
+    link = link.strip()
+    return parse_qs(urlparse(link).query).get('list', [link])[0]
 
-    previous_id = identity(last_selected) if last_selected else None
-    alternatives = [link for link in playlists if identity(link) != previous_id]
+
+def choose_playlist(playlists, last_selected):
+    previous_id = playlist_identity(last_selected) if last_selected else None
+    blocked_ids = {playlist_identity(entry) for entry in PLAYLIST_BLACKLIST}
+    alternatives = [link for link in playlists
+                    if playlist_identity(link) != previous_id
+                    and playlist_identity(link) not in blocked_ids]
     return random.choice(alternatives) if alternatives else None
 
 
@@ -180,7 +185,7 @@ def perform() -> None:
             playlists = get_available_playlists()
             selected = choose_playlist(playlists, last_selected)
             if selected is None:
-                print('No different playlist is available. Checking again in 30 seconds...')
+                print('No different, non-blacklisted playlist is available. Checking again in 30 seconds...')
                 sleep(RETRY_DELAY)
                 continue
             watch_video(selected)

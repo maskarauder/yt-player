@@ -42,6 +42,20 @@ or if your profile is already setup you can skip the setup prompt by modifying !
 `PAUSE_FOR_BROWSER_LOGIN           = False`
 
 ## Playback and recovery
+
+- Set `ENABLE_OBS = False` in `config.py` to test just the browser. No OBS module or monitor is started; the default is `True`.
+- Add playlist IDs or playlist URLs to `PLAYLIST_BLACKLIST` in `config.py`. Matching uses the `list=` ID, so different video URLs for the same playlist are also excluded. If everything is excluded, the script waits and checks again.
+
+For example:
+
+```python
+ENABLE_OBS = False
+PLAYLIST_BLACKLIST = [
+    'PL_REPLACE_WITH_PLAYLIST_ID',
+    'https://www.youtube.com/playlist?list=PL_ANOTHER_ID',
+]
+```
+
 - The same playlist is never selected twice in a row. If no different playlist is available, the script waits 30 seconds and checks again.
 - Playlist completion uses the final video's ID, position, and ended state. Pausing or buffering does not count as finishing the video.
 - Slow YouTube page loads are retried. Closing Chrome or stopping the script also stops the OBS monitor and closes its connections; it does not stop an active OBS stream.

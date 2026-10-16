@@ -4,27 +4,15 @@ Plays a random YouTube playlist from a list of playlists. Restarts the stream wi
 ## Quick Start
 - [Download source as a ZIP](./archive/refs/heads/main.zip)
 - Unzip the source
-- Edit config.py to change the any of the configuration variables.
-- Install python
-- Install the packages in requirements.txt
+- Install [uv](https://docs.astral.sh/uv/getting-started/installation/) (`winget install --id astral-sh.uv -e` on Windows)
+- Reopen a terminal in the project folder.
+- Edit config.py to change any of the configuration variables.
 - Setup OBS WebSocket to allow connections.
-- Run the code with `python .\main.py`
+- Run the code with `uv run main.py`
 - Follow the prompt, hit enter to start it running.
 
-## Installing Python
-Open a PowerShell windows and type the python command.  
-
-If you have python installed, it should drop you into a python interpreter. Type "quit()" to exit.  
-Otherwise it should open the Windows store, press install to install the latest version of python3.  
-
-Install python dependencies:  
-Right click the folder where you unzipped this project without selecting a file.  
-Click "Open in terminal" from the presented options.  
-![Open in Terminal option](./images/terminal-option.png)  
-
-In the terminal, type the following command:  
-`python -m pip install --upgrade -r requirements.txt`
-
+`uv` manages Python, dependencies, and the virtual environment automatically.  
+Install Google Chrome separately.
 
 ## Setting up the OBS WebSocket
 In OBS, navigate to Tools -> WebSocket Server Settings.  
@@ -35,7 +23,7 @@ You can then click to Copy the Server Password from the "Show Connect Info" scre
 ![WebSocket configuration](./images/websocket-connection-info.png)
 
 ## Run the code
-`python .\main.py`
+`uv run main.py`
 
 or if your profile is already setup you can skip the setup prompt by modifying ![config.py](./config.py) with the following setting
 
@@ -63,7 +51,7 @@ PLAYLIST_BLACKLIST = [
 - OBS connection failures are retried. Stream restarts allow 30 seconds per stop/start attempt, with up to three attempts before waiting for a manual stream restart.
 
 ## Regression tests
-Run `python -m unittest discover -s tests -v`. The tests use fake browser and OBS clients, so they do not require a running Chrome or OBS instance. Player JavaScript tests also run when Node.js is installed; otherwise those tests are skipped.
+Run `uv run python -m unittest discover -s tests -v`. The tests use fake browser and OBS clients, so they do not require a running Chrome or OBS instance. Player JavaScript tests also run when Node.js is installed; otherwise those tests are skipped.
 
 ## Troubleshooting
 The console reports `Opening playlists page`, `Scrolling the playlists page`, `Found ... playlists`, and `Selected playlist`. If playback does not start, the last message identifies the stage that needs attention. A navigation timeout is allowed to use content already loaded; playlist discovery does not depend on thumbnail CSS classes or a visible loading marker.

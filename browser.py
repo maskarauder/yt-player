@@ -31,8 +31,13 @@ PLAYER_STATE_SCRIPT = """
 const player = document.getElementById('movie_player');
 const methods = ['getPlaylist', 'getPlaylistIndex', 'getVideoUrl',
                  'getPlayerState', 'addEventListener'];
-if (!player || methods.some(name => typeof player[name] !== 'function')) {
-    return null;
+if (!player) {
+    return {ready: false, ended: false, reason: 'movie_player not found'};
+}
+const missingMethods = methods.filter(name => typeof player[name] !== 'function');
+if (missingMethods.length) {
+    return {ready: false, ended: false, reason: 'player methods unavailable',
+            missingMethods: missingMethods};
 }
 if (!window.__ytPlayerCompletion || window.__ytPlayerCompletion.player !== player) {
     const tracker = {player: player, ended: false};
@@ -48,7 +53,10 @@ if (!window.__ytPlayerCompletion || window.__ytPlayerCompletion.player !== playe
         if (ready && !advertising && index === ids.length - 1 && state === 0) {
             tracker.ended = true;
         }
-        return {ready: ready, ended: tracker.ended};
+        return {ready: ready, ended: tracker.ended, playerState: state,
+                playlistLength: ids.length, playlistIndex: index,
+                videoId: id, expectedVideoId: ids[index] ?? null,
+                advertising: advertising};
     };
     window.__ytPlayerStateChanged = function(event) {
         const state = typeof event === 'number' ? event : event.data;
@@ -158,33 +166,55 @@ def choose_playlist(playlists, last_selected):
     return random.choice(alternatives) if alternatives else None
 
 
-def get_playback_state():
-    state = driver.execute_script(PLAYER_STATE_SCRIPT)
-    return state if state and (state['ready'] or state['ended']) else False
+def wait_for_playback_state():
+    last_state = None
+
+    def ready(_):
+        nonlocal last_state
+        last_state = driver.execute_script(PLAYER_STATE_SCRIPT)
+        return last_state if last_state and (last_state['ready'] or last_state['ended']) else False
+
+    try:
+        return WebDriverWait(driver, PAGE_TIMEOUT).until(ready)
+    except TimeoutException as exc:
+        raise TimeoutException(
+            f'Playback/playlist metadata did not become ready within {PAGE_TIMEOUT}s. '
+            f'Last player state: {last_state!r}') from exc
 
 
 def fullscreen_video() -> None:
     if driver.execute_script('return Boolean(document.fullscreenElement);'):
         return
-    button = WebDriverWait(driver, PAGE_TIMEOUT).until(
-        EC.element_to_be_clickable((By.CLASS_NAME, 'ytp-fullscreen-button')))
-    ActionChains(driver).move_to_element(button).click().perform()
+    try:
+        button = WebDriverWait(driver, PAGE_TIMEOUT).until(
+            EC.element_to_be_clickable((By.CLASS_NAME, 'ytp-fullscreen-button')))
+        ActionChains(driver).move_to_element(button).click().perform()
+    except TimeoutException as exc:
+        raise TimeoutException(
+            'Entering fullscreen timed out while waiting for or clicking '
+            'the fullscreen button.') from exc
 
 
 def watch_video(link) -> None:
+    print(f'Opening selected playlist/video: {link}')
     driver.get(link)
     if urlparse(link).path == '/playlist':
+        print('Waiting for the first video link in the playlist...')
         first_video = WebDriverWait(driver, PAGE_TIMEOUT).until(
             EC.presence_of_element_located(
                 (By.CSS_SELECTOR, 'a[href*="/watch?"][href*="list="]')))
+        print('Opening the first playlist video...')
         driver.get(first_video.get_attribute('href'))
-    state = WebDriverWait(driver, PAGE_TIMEOUT).until(lambda _: get_playback_state())
+    print('Waiting for playback/playlist metadata...')
+    state = wait_for_playback_state()
+    print('Player metadata ready; entering fullscreen...')
     fullscreen_video()
+    print('Monitoring playlist completion...')
     while not state['ended']:
         sleep(1)
         # Wait through temporary player replacement during playlist navigation.
         # A missing/broken player eventually times out and is retried by perform.
-        state = WebDriverWait(driver, PAGE_TIMEOUT).until(lambda _: get_playback_state())
+        state = wait_for_playback_state()
     print('Playlist finished.')
 
 
@@ -206,5 +236,5 @@ def perform() -> None:
             watch_video(selected)
             last_selected = selected
         except (TimeoutException, StaleElementReferenceException) as exc:
-            print(f'YouTube did not finish loading. Retrying in 30 seconds: {exc}')
+            print(f'YouTube check failed ({type(exc).__name__}). Retrying in 30 seconds: {exc}')
             sleep(RETRY_DELAY)

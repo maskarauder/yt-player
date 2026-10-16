@@ -6,7 +6,6 @@ from time import monotonic, sleep
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 import undetected_chromedriver as uc
-from selenium.webdriver import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
@@ -183,16 +182,27 @@ def wait_for_playback_state():
 
 
 def fullscreen_video() -> None:
-    if driver.execute_script('return Boolean(document.fullscreenElement);'):
+    def is_fullscreen(d):
+        return d.execute_script('''
+            return Boolean(document.fullscreenElement ||
+                           document.querySelector('#movie_player.ytp-fullscreen'));
+        ''')
+
+    if is_fullscreen(driver):
         return
+    stage = 'waiting for the video player to become visible'
     try:
-        button = WebDriverWait(driver, PAGE_TIMEOUT).until(
-            EC.element_to_be_clickable((By.CLASS_NAME, 'ytp-fullscreen-button')))
-        ActionChains(driver).move_to_element(button).click().perform()
+        player = WebDriverWait(driver, PAGE_TIMEOUT).until(
+            EC.visibility_of_element_located((By.ID, 'movie_player')))
+        # Target the player so auto-hidden controls cannot block fullscreen,
+        # and the shortcut cannot accidentally be typed into the search box.
+        stage = 'sending the fullscreen shortcut to the video player'
+        player.send_keys('f')
+        stage = 'waiting for fullscreen after sending the shortcut'
+        WebDriverWait(driver, PAGE_TIMEOUT).until(is_fullscreen)
     except TimeoutException as exc:
         raise TimeoutException(
-            'Entering fullscreen timed out while waiting for or clicking '
-            'the fullscreen button.') from exc
+            f'Entering fullscreen timed out while {stage}.') from exc
 
 
 def watch_video(link) -> None:

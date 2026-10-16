@@ -224,6 +224,80 @@ class DiscoveryFlowTests(unittest.TestCase):
         self.assertGreater(self.predicate_calls, 1)
 
 
+class FullscreenTests(unittest.TestCase):
+    def setUp(self):
+        self.browser, _ = load_browser()
+        self.browser.driver = Mock()
+        self.fullscreen = False
+        self.player = Mock(is_displayed=Mock(return_value=True))
+        self.button = Mock(is_displayed=Mock(return_value=False))
+        self.player.send_keys.side_effect = self.press_key
+        self.browser.driver.execute_script.side_effect = lambda _: self.fullscreen
+        self.browser.driver.find_element.side_effect = self.find_element
+        self.browser.EC.visibility_of_element_located = self.visible_element
+        self.browser.EC.element_to_be_clickable = self.visible_element
+        self.browser.WebDriverWait = self.wait
+
+    def press_key(self, key):
+        self.assertEqual(key, "f")
+        self.fullscreen = not self.fullscreen
+
+    def find_element(self, by, selector):
+        if (by, selector) == (self.browser.By.ID, "movie_player"):
+            return self.player
+        if (by, selector) == (self.browser.By.CLASS_NAME, "ytp-fullscreen-button"):
+            return self.button  # Auto-hidden controls must not block fullscreen.
+        raise AssertionError(f"Unexpected lookup: {by}, {selector}")
+
+    def visible_element(self, locator):
+        def predicate(driver):
+            element = driver.find_element(*locator)
+            return element if element.is_displayed() else False
+        return predicate
+
+    def wait(self, driver, timeout):
+        exception_type = self.browser.TimeoutException
+
+        class Wait:
+            def until(self, condition):
+                for _ in range(5):
+                    result = condition(driver)
+                    if result:
+                        return result
+                raise exception_type("condition remained false")
+
+        return Wait()
+
+    def test_hidden_controls_do_not_block_fullscreen(self):
+        self.browser.fullscreen_video()
+        self.assertTrue(self.fullscreen)
+        self.player.send_keys.assert_called_once_with("f")
+
+    def test_already_fullscreen_is_not_toggled_off(self):
+        self.fullscreen = True
+        self.browser.fullscreen_video()
+        self.assertTrue(self.fullscreen)
+        self.player.send_keys.assert_not_called()
+
+    def test_waits_for_fullscreen_to_take_effect(self):
+        states = iter([False, False, False, True])
+        self.browser.driver.execute_script.side_effect = lambda _: next(states)
+        self.browser.fullscreen_video()
+        self.assertEqual(self.browser.driver.execute_script.call_count, 4)
+        self.player.send_keys.assert_called_once_with("f")
+
+    def test_shortcut_without_fullscreen_confirmation_times_out(self):
+        self.player.send_keys.side_effect = None
+        with self.assertRaisesRegex(self.browser.TimeoutException, "after sending"):
+            self.browser.fullscreen_video()
+
+    def test_invisible_player_times_out_without_sending_keys(self):
+        self.player.is_displayed.return_value = False
+        with self.assertRaisesRegex(self.browser.TimeoutException, "player to become visible"):
+            self.browser.fullscreen_video()
+        self.player.send_keys.assert_not_called()
+
+
 class PlaybackTests(unittest.TestCase):
     def setUp(self):
         self.browser, _ = load_browser()

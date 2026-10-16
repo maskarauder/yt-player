@@ -46,6 +46,8 @@ PLAYLIST_BLACKLIST = [
 
 - The same playlist is never selected twice in a row. If no different playlist is available, the script waits 30 seconds and checks again.
 - Playlist completion uses the final video's ID, position, and ended state. Pausing or buffering does not count as finishing the video.
+- Live chat and chat replay are hidden, including in fullscreen.
+- Playback starts automatically. If a finished video has not advanced after five seconds, the next playlist item is requested; a failed start or advance times out after 30 seconds. Manual pauses after playback starts are left alone.
 - Slow YouTube page loads are retried. Closing Chrome or stopping the script also stops the OBS monitor and closes its connections; it does not stop an active OBS stream.
 - Set `RESTART_INTERVAL = -1` to disable scheduled restarts. `RESTART_ON_UNEXPECTED_END` separately controls recovery after an unexpected stop.
 - OBS connection failures are retried. Stream restarts allow 30 seconds per stop/start attempt, with up to three attempts before waiting for a manual stream restart.

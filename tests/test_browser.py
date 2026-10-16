@@ -27,7 +27,7 @@ def load_browser():
     )
     dependencies = {
         "undetected_chromedriver": types.SimpleNamespace(
-            Chrome=chrome, ChromeOptions=types.SimpleNamespace),
+            Chrome=chrome, ChromeOptions=lambda: types.SimpleNamespace(add_argument=Mock())),
         "bs4": types.SimpleNamespace(BeautifulSoup=Mock(name="BeautifulSoup")),
         "selenium": types.ModuleType("selenium"),
         "selenium.webdriver": types.SimpleNamespace(ActionChains=Mock()),
@@ -62,6 +62,7 @@ class PlaylistSelectionTests(unittest.TestCase):
         self.browser.create_browser()
         options = self.chrome.call_args.kwargs["options"]
         self.assertEqual(options.page_load_strategy, "eager")
+        options.add_argument.assert_called_once_with('--autoplay-policy=no-user-gesture-required')
         self.chrome.return_value.set_page_load_timeout.assert_called_once_with(
             self.browser.PAGE_TIMEOUT)
 
@@ -303,6 +304,8 @@ class PlaybackTests(unittest.TestCase):
         self.browser, _ = load_browser()
         self.browser.driver = Mock()
         self.browser.fullscreen_video = Mock()
+        self.browser.hide_live_chat = Mock()
+        self.browser.recover_playback = Mock()
         self.browser.sleep = Mock()
 
     def immediate_wait(self, driver, timeout):
@@ -329,6 +332,8 @@ class PlaybackTests(unittest.TestCase):
             self.browser.watch_video("https://www.youtube.com/watch?v=first&list=PL1")
         self.assertEqual(self.browser.sleep.call_args_list, [call(1), call(1)])
         self.browser.fullscreen_video.assert_called_once()
+        self.assertEqual(self.browser.hide_live_chat.call_count, 3)
+        self.assertEqual(self.browser.recover_playback.call_count, 2)
 
     def test_missing_player_times_out(self):
         self.browser.driver.execute_script.return_value = None

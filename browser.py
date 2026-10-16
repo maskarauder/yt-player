@@ -66,10 +66,87 @@ if (!window.__ytPlayerCompletion || window.__ytPlayerCompletion.player !== playe
 return window.__ytPlayerCompletion.read(player.getPlayerState());
 """
 
+HIDE_CHAT_SCRIPT = """
+const chat = document.querySelector('ytd-live-chat-frame');
+if (chat && !chat.hasAttribute('collapsed')) {
+    const fullscreen = document.fullscreenElement ||
+                       document.querySelector('#movie_player.ytp-fullscreen');
+    const close = fullscreen ? document.querySelector(
+        '.ytp-fullscreen-quick-actions button[aria-label="Hide chat"], ' +
+        '.ytp-fullscreen-quick-actions button[aria-label="Live chat"][aria-pressed="true"]'
+    ) : chat.querySelector('#show-hide-button button');
+    // Use YouTube's own control to release the space reserved for the panel.
+    if (close) close.click();
+}
+// Keep late-loaded/reopened chat hidden across YouTube's in-page navigation.
+if (!document.getElementById('yt-player-hide-chat')) {
+    const style = document.createElement('style');
+    style.id = 'yt-player-hide-chat';
+    style.textContent = 'ytd-live-chat-frame, #chat-container {display:none!important}';
+    document.head.appendChild(style);
+}
+"""
+
+RECOVER_PLAYBACK_SCRIPT = """
+const tracker = window.__ytPlayerCompletion;
+if (!tracker || tracker.player !== document.getElementById('movie_player')) return null;
+const player = tracker.player;
+// Read again immediately before acting, so native autoplay cannot cause a skip.
+const state = tracker.read(player.getPlayerState());
+if (!state.ready || state.ended) return null;
+const now = performance.now();
+const key = state.playlistIndex + ':' + state.videoId;
+if (!tracker.recovery || tracker.recovery.key !== key) {
+    tracker.recovery = {key: key, played: false, since: now,
+                        playRequested: false, endedAt: null, nextRequestedAt: null};
+}
+const recovery = tracker.recovery;
+if (state.advertising) {
+    recovery.since = now;
+    recovery.endedAt = null;
+    if (recovery.nextRequestedAt !== null) recovery.nextRequestedAt = now;
+    return null;
+}
+const fail = reason => ({error: reason, state: state});
+if (recovery.nextRequestedAt !== null && now - recovery.nextRequestedAt >= arguments[0]) {
+    return fail('The playlist did not advance after requesting the next video.');
+}
+if (state.playerState === 1) {
+    recovery.played = true;
+    recovery.endedAt = null;
+    return null;
+}
+if (state.playerState === 0 && state.playlistIndex < state.playlistLength - 1) {
+    if (recovery.endedAt === null) recovery.endedAt = now;
+    if (recovery.nextRequestedAt === null && now - recovery.endedAt >= 5000) {
+        if (typeof player.nextVideo !== 'function') return fail('nextVideo is unavailable.');
+        recovery.nextRequestedAt = now;
+        player.nextVideo();
+        return {action: 'next', state: state};
+    }
+    return null;
+}
+recovery.endedAt = null;
+// Start each new item once; leave a manual pause alone after it has played.
+if (!recovery.played) {
+    if (now - recovery.since >= arguments[0]) {
+        return fail('The video did not start playing.');
+    }
+    if ([-1, 2, 5].includes(state.playerState) && !recovery.playRequested) {
+        if (typeof player.playVideo !== 'function') return fail('playVideo is unavailable.');
+        recovery.playRequested = true;
+        player.playVideo();
+        return {action: 'play', state: state};
+    }
+}
+return null;
+"""
+
 
 def create_browser() -> None:
     global driver
     options = uc.ChromeOptions()
+    options.add_argument('--autoplay-policy=no-user-gesture-required')
     # YouTube can keep loading secondary resources after the page is usable.
     options.page_load_strategy = 'eager'
     driver = uc.Chrome(options=options, headless=False, use_subprocess=True,
@@ -205,6 +282,22 @@ def fullscreen_video() -> None:
             f'Entering fullscreen timed out while {stage}.') from exc
 
 
+def hide_live_chat() -> None:
+    driver.execute_script(HIDE_CHAT_SCRIPT)
+
+
+def recover_playback() -> None:
+    result = driver.execute_script(RECOVER_PLAYBACK_SCRIPT, PAGE_TIMEOUT * 1000)
+    if not result:
+        return
+    if 'error' in result:
+        raise TimeoutException(
+            f"Automatic playback failed: {result['error']} Last player state: {result['state']!r}")
+    state = result['state']
+    print(f"Playback recovery: {result['action']} for video {state['videoId']} "
+          f"(playlist item {state['playlistIndex'] + 1}/{state['playlistLength']}).")
+
+
 def watch_video(link) -> None:
     print(f'Opening selected playlist/video: {link}')
     driver.get(link)
@@ -217,10 +310,13 @@ def watch_video(link) -> None:
         driver.get(first_video.get_attribute('href'))
     print('Waiting for playback/playlist metadata...')
     state = wait_for_playback_state()
+    hide_live_chat()
     print('Player metadata ready; entering fullscreen...')
     fullscreen_video()
     print('Monitoring playlist completion...')
     while not state['ended']:
+        hide_live_chat()
+        recover_playback()
         sleep(1)
         # Wait through temporary player replacement during playlist navigation.
         # A missing/broken player eventually times out and is retried by perform.

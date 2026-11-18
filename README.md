@@ -1,6 +1,8 @@
 # yt-player
 Plays a random YouTube playlist from a list of playlists. Restarts the stream within OBS after a period of time to avoid stream dying.
 
+Part of [Maskarauder's open-source stream & audio tools](https://maskarauder.com/).
+
 ## Quick Start
 - [Download source as a ZIP](./archive/refs/heads/main.zip)
 - Unzip the source
